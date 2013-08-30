@@ -1,0 +1,526 @@
+
+<html>
+    <head>
+
+        <meta name="author" content="Rahmat Hidayat">
+        <title>Framebuffer Objects</title>
+
+        <script src="js/gl-matrix.min.js"></script>
+        <script src="js/dat.gui.min.js"></script>
+
+        <!-- SIMULATION SHADER -->
+
+        <script id="simulation-vs" type="x-shader/x-vertex"> 
+            
+            attribute vec2 aPos;
+            attribute vec2 aTexCoord;
+
+            varying   vec2 vTexCoord;
+            
+            void main(void) {
+
+                gl_Position = vec4(aPos, 0., 1.);
+                vTexCoord   = aTexCoord;
+            }
+        </script> 
+
+        <script id="simulation-fs" type="x-shader/x-fragment"> 
+
+            precision highp float;
+
+            const vec4 abrdt = vec4(3., 1., 20., .01);
+            const vec4 gfodt = vec4(.1, 3., 1., .02);
+            
+            uniform sampler2D samp;            
+            uniform int uAlgorithms;
+            uniform float uPhase;
+
+            varying vec2 vTexCoord;
+
+            float rand(vec2 pos) {
+                return fract(sin(dot(pos.xy ,vec2(12.9898,78.233))) * 43758.5453);
+            }
+
+            vec2 F(vec2 r, float t){
+                return vec2( r.y,  -gfodt.x * r.y - r.x * r.x * (1. + r.x) + gfodt.y * sin(gfodt.z*t) );
+            } 
+
+            void main(void) {
+
+                vec3 position = texture2D(samp, vTexCoord).xyz;
+
+                if(uAlgorithms == 0) {
+                    
+                    // trigonometric
+                    
+                    position.x += sin(position.y) * cos(position.z) * 0.01 * uPhase;
+                    position.y += sin(position.x * 100.) * cos( position.z) * 0.04;
+                    position.z += sin(position.x) * cos( position.y) * 0.04;
+                    
+                    gl_FragColor = vec4(position, 1.0);
+
+                }
+
+                if(uAlgorithms == 1) {
+
+                    /*
+                    Lorenz
+                    x' = a(y - x), 
+                    y' = x(r - z) - y, 
+                    z' = xy - bz. 
+                    */
+
+                    gl_FragColor = vec4(
+
+                        position.x + abrdt.x * (position.y - position.x) * abrdt.w,
+                        position.y + (position.x * (abrdt.z - position.z) - position.y) * abrdt.w,
+                        position.z + (position.x * position.y - abrdt.y * position.z) * abrdt.w,  
+                        1. 
+
+                    );
+
+                }
+
+                if(uAlgorithms == 2) {
+
+                    /*
+                    Duffing, with altered position.z
+                    x' = v, 
+                    v' = -δv - x - x3 + F sin(ωt). 
+                    */
+
+                    vec2 r = position.xy;
+                    
+                    vec2 k;
+                    vec2 s;
+                                        
+                    float h2 = gfodt.w * .5;
+                    k = F(r, uPhase);   
+                    s = k;
+                    k = F(r + h2 * k, uPhase + h2);  
+                    s += k + k;
+                    k = F(r + h2 * k, uPhase + h2);  
+                    s += k + k;
+                    r += (s + F(r + gfodt.w * k, uPhase + gfodt.w)) * h2 * .03;
+
+                    position.z += cos(r.x) * .001;
+
+                    gl_FragColor = vec4(r, position.z, 1.);
+
+                }
+
+            }
+
+        </script> 
+
+        <!-- RENDER SHADER -->
+ 
+        <script id="render-vs" type="x-shader/x-vertex"> 
+
+            attribute vec2 aPoints;
+
+            uniform sampler2D uTexSamp;
+            uniform mat4 uPerspectiveMatrix;
+            uniform mat4 uModelViewMatrix;
+
+            void main(void) {
+            
+                vec3 p = texture2D(uTexSamp, aPoints ).xyz;
+
+                gl_Position = uPerspectiveMatrix * uModelViewMatrix * vec4( p.x, p.y, p.z, 20. );
+
+                gl_PointSize   = 1.;
+
+            }
+
+        </script> 
+ 
+        <script id="render-fs" type="x-shader/x-fragment"> 
+
+            precision highp float;
+
+            uniform vec3 uColor;
+        
+            void main(void) {
+                gl_FragColor = vec4( uColor, 1. );
+            }
+        
+        </script> 
+ 
+        <script type="text/javascript"> 
+
+            /*
+            ------------------------------------------------------------
+
+            Helper
+
+            ------------------------------------------------------------
+            */
+
+            requestAnimFrame = (function(){
+
+                return  window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame ||
+                
+                function(callback, element){ window.setTimeout(callback, 1000 / 60); }
+            
+            })();
+
+            function getWebGLContext( canvas ) {
+
+                var gl, canvas = document.getElementById("canvas");
+                canvas.width =  window.innerWidth;   
+                canvas.height = window.innerHeight;
+
+                if (!window.WebGLRenderingContext){
+                
+                    alert("No WebGL. See http://get.webgl.org"); return;
+
+                } try { gl = canvas.getContext("experimental-webgl"); } catch(e) {}
+
+                if ( !gl ) {
+
+                    alert("Can't get WebGL"); 
+
+                    return;
+
+                }
+
+                var ext = gl.getExtension("OES_texture_float");
+
+                if ( !ext ) {
+                
+                    alert("OES_texture_float extension"); 
+
+                    return;
+                
+                }
+
+                if (gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) == 0){
+
+                    alert("No Vertex texture"); 
+
+                    return;
+                
+                }
+
+
+                return gl;
+            }
+
+            function shaderSource( elementID ) {
+
+                var element = document.getElementById( elementID );
+                return element ? element.textContent : '';
+
+            }
+
+            // Creates and compiles a shader from source
+            function createShader( source, type ) {
+
+                var shader = gl.createShader( type );
+
+                gl.shaderSource( shader, source );
+                gl.compileShader( shader );
+
+                if ( !gl.getShaderParameter( shader, gl.COMPILE_STATUS ) )
+                    throw gl.getShaderInfoLog( shader );
+
+                return shader;
+            }
+
+            function createProgram( vertexSource, fragmentSource ) {
+
+                var vs = createShader( vertexSource, gl.VERTEX_SHADER );
+                var fs = createShader( fragmentSource, gl.FRAGMENT_SHADER );
+
+                var program = gl.createProgram();
+
+                gl.attachShader( program, vs );
+                gl.attachShader( program, fs );
+                
+                return program;
+            }
+
+            function checkFrameBuffer() {
+
+                var valid = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+
+                switch(valid) {
+
+                    case gl.FRAMEBUFFER_UNSUPPORTED:
+                        throw 'Framebuffer is unsupported';
+                    case gl.FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
+                        throw 'Framebuffer incomplete attachment';
+                    case gl.FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
+                        throw 'Framebuffer incomplete dimensions';
+                    case gl.FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
+                        throw 'Framebuffer incomplete missing attachment';
+
+                }
+
+            }
+
+        
+            /*
+            ------------------------------------------------------------
+
+            Config
+
+            ------------------------------------------------------------
+            */
+
+            var PARTICLE_SQRT = 512, PARTICLE_COUNT = PARTICLE_SQRT * PARTICLE_SQRT;
+
+            var gl, simulationProgram, renderProgram, texture, fbo, 
+                modelViewMatrix, perspectiveMatrix, 
+                options, phase = 0, algorithms = 2;
+
+            /*
+            ------------------------------------------------------------
+
+            Init
+
+            ------------------------------------------------------------
+            */
+
+            function init() {
+   
+                iniDatGUI();
+
+                gl = getWebGLContext();
+     
+                setSimulationProgram();
+                setRenderProgram();
+                setMatrix();
+                
+                draw();
+
+            }
+
+            function setMatrix() {
+
+                modelViewMatrix     = mat4.create();
+                perspectiveMatrix   = mat4.create();
+                mat4.perspective( perspectiveMatrix, 60 / 180 * Math.PI, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 100 );
+
+            }
+
+            function setSimulationProgram() {
+
+                simulationProgram  = createProgram( shaderSource( 'simulation-vs' ), shaderSource( 'simulation-fs' ) );
+                gl.linkProgram( simulationProgram );
+                gl.useProgram(simulationProgram);
+
+                simulationProgram.aPosLoc       = gl.getAttribLocation(simulationProgram, "aPos");
+                simulationProgram.aTexLoc       = gl.getAttribLocation(simulationProgram, "aTexCoord");
+                simulationProgram.uAlgorithmsLoc = gl.getUniformLocation(simulationProgram, "uAlgorithms");
+                simulationProgram.uPhaseLoc     = gl.getUniformLocation(simulationProgram, "uPhase");
+
+                gl.enableVertexAttribArray( simulationProgram.aPosLoc );
+                gl.enableVertexAttribArray( simulationProgram.aTexLoc );
+                gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+
+                //http://stackoverflow.com/a/5402604/447988
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                    // http://blog.tojicode.com/2011/05/interleaved-array-basics.html
+                    // aPosLoc      // aTexLoc
+                    -1,-1,          0,0, 
+                    -1,1,           0,1,
+                    1,-1,           1,0, 
+                    1,1,            1,1]), gl.STATIC_DRAW);
+                gl.vertexAttribPointer( simulationProgram.aPosLoc, 2, gl.FLOAT, gl.FALSE, 16, 0 );
+                gl.vertexAttribPointer( simulationProgram.aTexLoc, 2, gl.FLOAT, gl.FALSE, 16, 8 );
+
+                var vertices = new Float32Array( 3 * PARTICLE_COUNT ),
+                    d = 10,
+                    t = 0;
+
+                for(var i = 0; i < PARTICLE_COUNT; i++) {
+
+                    vertices[t++] = d * (Math.random() + Math.random() + Math.random() - 1.5);
+                    vertices[t++] = d * (Math.random() + Math.random() + Math.random() - 1.5);
+                    vertices[t++] = d * (Math.random() + Math.random() + Math.random() - 1.5) + 25;
+
+                }
+
+                texture = gl.createTexture();
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, PARTICLE_SQRT, PARTICLE_SQRT, 0, gl.RGB, gl.FLOAT, vertices);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+                fbo = gl.createFramebuffer();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+                
+                checkFrameBuffer();
+
+                gl.uniform1i(gl.getUniformLocation(simulationProgram, "samp"), 0);
+                gl.uniform1i( simulationProgram.uAlgorithmsLoc, algorithms );
+
+            }
+
+            
+
+            function setRenderProgram() {
+
+                renderProgram  = createProgram( shaderSource( 'render-vs' ), shaderSource( 'render-fs' ) );
+
+                var aPointsLoc = 2;
+                gl.bindAttribLocation(renderProgram, aPointsLoc, "aPoints");
+                gl.linkProgram(renderProgram);
+                gl.useProgram(renderProgram);
+
+                var vertices = new Float32Array( 2 * PARTICLE_COUNT ), 
+                    d = 1/PARTICLE_SQRT, 
+                    t = 0;
+
+                for ( var y = d/2; y < 1; y += d ) {
+
+                    for ( var x = d/2; x < 1; x += d ) {
+
+                        vertices[t++] = x;  
+                        vertices[t++] = y;        
+
+                    }
+                }
+
+                renderProgram.uPerspectiveMatrixLoc = gl.getUniformLocation( renderProgram, "uPerspectiveMatrix");
+                renderProgram.uModelViewMatrixLoc   = gl.getUniformLocation( renderProgram, "uModelViewMatrix"); 
+                renderProgram.uColorLoc             = gl.getUniformLocation( renderProgram, "uColor"); 
+
+                // console.log( renderProgram.uPerspectiveMatrixLoc, renderProgram.uModelViewMatrixLoc );
+
+                gl.enableVertexAttribArray( aPointsLoc );
+                gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+                gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+                gl.vertexAttribPointer(aPointsLoc, 2, gl.FLOAT, false, 0, 0);
+
+                gl.uniform1i( gl.getUniformLocation(renderProgram, "uTexSamp"), 0 );
+                gl.uniform3f( renderProgram.uColorLoc, options.colors[0]/255, options.colors[1]/255, options.colors[2]/255 );
+
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+                gl.clearColor(0, 0, 0, 1);
+                gl.disable(gl.DEPTH_TEST);
+
+            }
+
+            function drawFBO(){
+   
+                gl.viewport(0, 0, PARTICLE_SQRT, PARTICLE_SQRT);
+                gl.useProgram(simulationProgram);
+
+                gl.uniform1f( simulationProgram.uPhaseLoc, phase );
+                gl.uniform1i( simulationProgram.uAlgorithmsLoc, algorithms );
+
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                gl.flush();
+
+            }
+
+            function drawScene(){
+
+                gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                gl.useProgram(renderProgram);
+                
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                mat4.identity( modelViewMatrix );
+                mat4.translate( modelViewMatrix, modelViewMatrix, [0.0, 0.0, -3.0] );
+                mat4.rotateX( modelViewMatrix, modelViewMatrix, Math.cos( phase * 0.8 ) * Math.PI * 0.15 );
+                mat4.rotateY( modelViewMatrix, modelViewMatrix, Math.sin( phase ) * Math.cos( phase * 0.25) );
+
+                // console.log( perspectiveMatrix, modelViewMatrix );
+
+                gl.uniformMatrix4fv( renderProgram.uPerspectiveMatrixLoc, false, perspectiveMatrix );
+                gl.uniformMatrix4fv( renderProgram.uModelViewMatrixLoc, false, modelViewMatrix );
+                
+                gl.enable(gl.BLEND);
+                gl.drawArrays(gl.POINTS, 0, PARTICLE_COUNT);
+                gl.disable(gl.BLEND);
+                gl.flush ();
+  
+            }
+
+            function draw(){
+
+                drawFBO();
+                drawScene();
+
+                phase += 0.01;
+
+                requestAnimFrame(draw);
+            }
+
+            /*
+            ------------------------------------------------------------
+
+            Dat GUI
+
+            ------------------------------------------------------------
+            */
+
+            function iniDatGUI() {
+
+                var gui = new dat.GUI();
+
+                options = {
+                    colors: [46, 5, 179],
+                    algorithms: ['Duffing', 'Lorenz', 'Trigonometric']
+                }
+
+                gui.add( options, 'algorithms', options.algorithms).name('Algorithms').onChange(function() {
+                    
+                    switch(options.algorithms) {
+                        case "Trigonometric":
+                            algorithms = 0;
+                            break;
+                        case "Lorenz":
+                            algorithms = 1;
+                            break;
+                        case "Duffing":
+                            algorithms = 2;
+                            break;  
+                    }
+
+                });
+
+                gui.addColor( options, 'colors' ).name( 'Colors' ).onChange(function() {
+                    gl.uniform3f( renderProgram.uColorLoc, options.colors[0]/255, options.colors[1]/255, options.colors[2]/255 );
+                });
+            }
+
+
+
+        </script> 
+
+        <style type="text/css">
+            
+            body, html {
+                padding: 0;
+                margin: 0;
+            }
+
+        </style>
+
+    </head>
+    <body onload="init();">
+
+        <canvas id="canvas"></canvas> 
+
+        <script>
+              (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+              (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+              m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+              })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+              ga('create', 'UA-10254588-8', 'bebensiganteng.com');
+              ga('send', 'pageview');
+
+        </script>
+    </body>
+</html>
