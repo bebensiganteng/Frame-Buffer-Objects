@@ -8,6 +8,7 @@
         <script src="js/gl-matrix.min.js"></script>
         <script src="js/dat.gui.min.js"></script>
 
+
         <!-- SIMULATION SHADER -->
 
         <script id="simulation-vs" type="x-shader/x-vertex"> 
@@ -275,6 +276,8 @@
                 modelViewMatrix, perspectiveMatrix, 
                 options, phase = 0, algorithms = 2;
 
+
+
             /*
             ------------------------------------------------------------
 
@@ -466,7 +469,7 @@
 
             function iniDatGUI() {
 
-                var gui = new dat.GUI();
+                var interval, gui = new dat.GUI();
 
                 options = {
                     colors: [46, 5, 179],
@@ -475,6 +478,8 @@
 
                 gui.add( options, 'algorithms', options.algorithms).name('Algorithms').onChange(function() {
                     
+                    // clearInterval(interval);
+
                     switch(options.algorithms) {
                         case "Trigonometric":
                             algorithms = 0;
@@ -487,11 +492,35 @@
                             break;  
                     }
 
-                });
+                }).listen();
 
                 gui.addColor( options, 'colors' ).name( 'Colors' ).onChange(function() {
                     gl.uniform3f( renderProgram.uColorLoc, options.colors[0]/255, options.colors[1]/255, options.colors[2]/255 );
                 });
+
+                options.algorithms = "Duffing";
+
+                interval = setInterval(function() {
+
+                    algorithms++;
+
+                    if(algorithms > 2) algorithms = 0;
+                   
+                    switch(algorithms) {
+                        case 0:
+                            options.algorithms = "Trigonometric";
+                            break;
+                        case 1:
+                            options.algorithms = "Lorenz";
+                            break;
+                        case 2:
+                            options.algorithms = "Duffing";
+                            break;  
+                    }
+
+                }, 10 * 1000);
+
+
             }
 
 
@@ -505,11 +534,33 @@
                 margin: 0;
             }
 
+            #info {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                color: white;
+                font-family:Verdana, Geneva, sans-serif;
+                font-size:10px;
+            }
+
+            #info a {
+                color:#CCC;
+                text-decoration:none;
+                border-bottom: dotted 1px #fff;
+            }
+
+            #info a:hover {
+                color:#6CF;
+            }
+
         </style>
 
     </head>
     <body onload="init();">
 
+        <div id="info">
+            Play with the Algorithms or check out my <a target="_blank" href='http://blog.bebensiganteng.com/'>blog</a>.
+        </div>
         <canvas id="canvas"></canvas> 
 
         <script>
